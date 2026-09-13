@@ -105,3 +105,10 @@ covers/
 - импорт CSV;
 - автоматический локальный backup по расписанию;
 - позже — опциональная облачная синхронизация без изменения local-first архитектуры.
+
+## Build compatibility note
+
+The project intentionally uses Android Gradle Plugin 8.11.1 with Kotlin 2.2.21.
+This is within Kotlin 2.2.21's officially supported AGP range, while still supporting compileSdk/targetSdk 36.
+The GitHub Actions workflow also uploads `BookShelf-build-diagnostics` on every run so failed test/compile logs are easy to inspect.
+
