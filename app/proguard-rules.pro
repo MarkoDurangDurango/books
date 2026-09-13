@@ -1,0 +1,2 @@
+-keep class com.bookshelf.app.data.** { *; }
+-dontwarn org.jetbrains.annotations.**
