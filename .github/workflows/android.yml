@@ -30,8 +30,14 @@ jobs:
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
 
-      - name: Install Android 36
-        run: sdkmanager "platforms;android-36" "build-tools;35.0.0"
+      - name: Install Android 36 SDK
+        run: sdkmanager "platform-tools" "platforms;android-36" "build-tools;36.0.0"
+
+      - name: Verify dependency compatibility
+        shell: bash
+        run: |
+          set -o pipefail
+          gradle :app:checkDebugAarMetadata --stacktrace --console=plain 2>&1 | tee gradle-aar-metadata.log
 
       - name: Run unit tests
         shell: bash
@@ -39,31 +45,28 @@ jobs:
           set -o pipefail
           gradle :app:testDebugUnitTest --stacktrace --console=plain 2>&1 | tee gradle-test.log
 
+      - name: Build debug APK
+        shell: bash
+        run: |
+          set -o pipefail
+          gradle :app:assembleDebug --stacktrace --console=plain 2>&1 | tee gradle-build.log
+
       - name: Upload build diagnostics
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: BookShelf-build-diagnostics
           path: |
+            gradle-aar-metadata.log
             gradle-test.log
+            gradle-build.log
             app/build/reports/
             app/build/test-results/
           if-no-files-found: ignore
 
-      - name: Build debug APK
-        run: gradle :app:assembleDebug --stacktrace --console=plain
-
-      - name: Build release APK
-        run: gradle :app:assembleRelease --stacktrace --console=plain
-
       - name: Upload debug APK
+        if: success()
         uses: actions/upload-artifact@v4
         with:
           name: BookShelf-debug
           path: app/build/outputs/apk/debug/app-debug.apk
-
-      - name: Upload unsigned release APK
-        uses: actions/upload-artifact@v4
-        with:
-          name: BookShelf-release-unsigned
-          path: app/build/outputs/apk/release/app-release-unsigned.apk

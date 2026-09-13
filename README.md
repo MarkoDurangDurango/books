@@ -2,7 +2,21 @@
 
 BookShelf — local-first Android-каталог физических книг и изданий.
 
-## Что уже работает
+## Сборочная конфигурация v1.0.2
+
+- Kotlin 2.2.21
+- Android Gradle Plugin 8.11.1
+- Gradle 8.13
+- JDK 17
+- compileSdk 36 / targetSdk 36
+- Compose BOM 2026.06.00 (Compose 1.11.x, совместим с compileSdk 36)
+- Room 2.8.5
+- CameraX 1.6.2
+- ML Kit Barcode Scanning 17.3.0
+
+Важно: Compose BOM 2026.08.00 в этой ветке намеренно не используется. Он переводит Compose 1.12 на compileSdk 37 и требует AGP 9.x, что несовместимо с выбранной связкой API 36 + AGP 8.11.1.
+
+## Что уже реализовано
 
 - сканирование ISBN-13 камерой через CameraX + ML Kit;
 - проверка и нормализация ISBN;
@@ -16,99 +30,20 @@ BookShelf — local-first Android-каталог физических книг �
 - ручное редактирование карточки;
 - экспорт PDF / CSV / JSON;
 - локальный backup/restore в формате `.bookshelf`;
-- светлая/тёмная системная тема;
-- GitHub Actions для сборки debug и unsigned release APK.
+- светлая/тёмная системная тема.
 
-## Стек
+## Сборка APK в GitHub
 
-- Kotlin 2.2.21
-- Jetpack Compose
-- Android Gradle Plugin 8.13.2
-- compileSdk 36.1 / targetSdk 36
-- minSdk 23
-- Room 2.8.5
-- CameraX 1.6.2
-- ML Kit Barcode Scanning 17.3.0
+Загрузите всё содержимое проекта в корень репозитория. Workflow `Build BookShelf APK` запускается при push в `main` / `master` или вручную.
 
-## Как собрать APK в GitHub
+CI выполняет три отдельные проверки:
 
-1. Создайте пустой GitHub-репозиторий.
-2. Загрузите **всё содержимое этой папки** в корень репозитория.
-3. Убедитесь, что основная ветка называется `main` или `master`.
-4. Откройте вкладку **Actions**.
-5. Запустите workflow **Build BookShelf APK** вручную либо просто сделайте push.
-6. После успешной сборки откройте run и скачайте artifact:
-   - `BookShelf-debug` — сразу устанавливаемый debug APK;
-   - `BookShelf-release-unsigned` — release APK без подписи.
+1. `checkDebugAarMetadata` — ловит несовместимость AndroidX / Compose / compileSdk / AGP до компиляции кода;
+2. `testDebugUnitTest` — компилирует debug-вариант и запускает unit-тесты;
+3. `assembleDebug` — собирает устанавливаемый APK.
 
-Debug APK будет находиться внутри artifact как:
+После успешной сборки скачайте artifact `BookShelf-debug`. Внутри будет `app-debug.apk`.
 
-`app-debug.apk`
+Artifact `BookShelf-build-diagnostics` создаётся всегда и содержит отдельные логи каждого этапа.
 
-## Локальная сборка
-
-Проект рассчитан прежде всего на GitHub Actions. В workflow Gradle 8.13 устанавливается автоматически через `gradle/actions/setup-gradle`.
-
-Если открываете проект в Android Studio, используйте JDK 17 и установленный Android SDK Platform 36.1 (targetSdk остаётся 36).
-
-## Архитектура данных
-
-`EditionEntity` хранит сведения об издании:
-
-- ISBN;
-- название;
-- автор;
-- издательство;
-- год;
-- страницы;
-- тип;
-- категории;
-- описание;
-- обложку;
-- источник метаданных.
-
-`BookCopyEntity` хранит конкретный экземпляр пользователя:
-
-- ссылку на издание;
-- состояние;
-- заметку;
-- дату добавления.
-
-Поэтому один ISBN может иметь несколько физических экземпляров.
-
-## Источники метаданных
-
-Сначала BookShelf обращается к Google Books, затем дополняет отсутствующие данные Open Library.
-
-Если издание уже встречалось раньше, карточка берётся из локальной Room-базы без сетевого запроса.
-
-## Backup
-
-`.bookshelf` — это ZIP-контейнер:
-
-```text
-manifest.json
-books.json
-covers/
-```
-
-При восстановлении текущая полка заменяется содержимым backup-файла.
-
-## Что логично делать следующим этапом
-
-- режим массового непрерывного сканирования;
-- отдельный экран статистики коллекции;
-- расширенные фильтры и сортировки;
-- пользовательская замена обложки;
-- экспорт PDF с настраиваемым шаблоном;
-- полноценная release-подпись через GitHub Secrets;
-- импорт CSV;
-- автоматический локальный backup по расписанию;
-- позже — опциональная облачная синхронизация без изменения local-first архитектуры.
-
-## Build compatibility note
-
-The project intentionally uses Android Gradle Plugin 8.11.1 with Kotlin 2.2.21.
-This is within Kotlin 2.2.21's officially supported AGP range, while still supporting compileSdk/targetSdk 36.
-The GitHub Actions workflow also uploads `BookShelf-build-diagnostics` on every run so failed test/compile logs are easy to inspect.
-
+Release/minify в этой версии намеренно не участвуют в CI: сначала фиксируем воспроизводимую debug-сборку и проверяем приложение на устройстве, после чего добавим signing и release pipeline отдельно.
