@@ -14,6 +14,15 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+
+        val settings = getSharedPreferences("bookshelf_settings", MODE_PRIVATE)
+        if (!settings.getBoolean("resolver_migrated_1_1_1", false)) {
+            settings.edit()
+                .remove("resolver_url")
+                .putBoolean("resolver_migrated_1_1_1", true)
+                .apply()
+        }
+
         val container = (application as BookShelfApplication).container
 
         setContent {
