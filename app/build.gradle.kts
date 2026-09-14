@@ -13,8 +13,8 @@ android {
         applicationId = "com.bookshelf.app"
         minSdk = 23
         targetSdk = 36
-        versionCode = 5
-        versionName = "1.1.0"
+        versionCode = 6
+        versionName = "1.1.1"
 
         val googleBooksApiKey = project.providers.gradleProperty("GOOGLE_BOOKS_API_KEY")
             .orElse(System.getenv("GOOGLE_BOOKS_API_KEY") ?: "")
@@ -24,8 +24,9 @@ android {
         buildConfigField("String", "GOOGLE_BOOKS_API_KEY", "\"$googleBooksApiKey\"")
 
         val resolverUrl = project.providers.gradleProperty("BOOKSHELF_RESOLVER_URL")
-            .orElse(System.getenv("BOOKSHELF_RESOLVER_URL") ?: "")
+            .orElse(System.getenv("BOOKSHELF_RESOLVER_URL") ?: "https://bookshelf-resolver.innernote.workers.dev")
             .get()
+            .ifBlank { "https://bookshelf-resolver.innernote.workers.dev" }
             .trimEnd('/')
             .replace("\\", "\\\\")
             .replace("\"", "\\\"")
