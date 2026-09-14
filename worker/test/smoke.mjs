@@ -3,6 +3,8 @@ import worker from "../src/index.js";
 
 const SAMPLE_ISBN = "9785915225021";
 const SAMPLE_TITLE = "Динамика неустойчивости. Кинетическое моделирование и методы управления";
+const LIVE_RESOLVER = "https://bookshelf-resolver.innernote.workers.dev";
+const nativeFetch = globalThis.fetch;
 
 globalThis.caches = {
   default: {
@@ -87,4 +89,17 @@ assert.equal(coverJson.book.title, SAMPLE_TITLE);
 assert.equal(coverJson.book.isbn13, SAMPLE_ISBN);
 assert.ok(coverJson.matchConfidence >= 0.9);
 
-console.log("BookShelf resolver smoke tests passed");
+console.log("BookShelf resolver local smoke tests passed");
+
+if (process.env.SKIP_LIVE_RESOLVER_TEST !== "1") {
+  const liveHealth = await nativeFetch(`${LIVE_RESOLVER}/health`);
+  const liveHealthText = await liveHealth.text();
+  assert.equal(liveHealth.status, 200, `Live health failed: HTTP ${liveHealth.status} ${liveHealthText}`);
+
+  const liveIsbn = await nativeFetch(`${LIVE_RESOLVER}/v1/books/isbn/${SAMPLE_ISBN}`);
+  const liveIsbnText = await liveIsbn.text();
+  console.log(`Live ISBN response: HTTP ${liveIsbn.status} ${liveIsbnText}`);
+  assert.equal(liveIsbn.status, 200, `Live ISBN failed: HTTP ${liveIsbn.status} ${liveIsbnText}`);
+  JSON.parse(liveIsbnText);
+  console.log("BookShelf resolver live smoke test passed");
+}
