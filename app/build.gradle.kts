@@ -13,8 +13,15 @@ android {
         applicationId = "com.bookshelf.app"
         minSdk = 23
         targetSdk = 36
-        versionCode = 1
-        versionName = "1.0.0"
+        versionCode = 3
+        versionName = "1.0.3"
+
+        val googleBooksApiKey = project.providers.gradleProperty("GOOGLE_BOOKS_API_KEY")
+            .orElse(System.getenv("GOOGLE_BOOKS_API_KEY") ?: "")
+            .get()
+            .replace("\\", "\\\\")
+            .replace("\"", "\\\"")
+        buildConfigField("String", "GOOGLE_BOOKS_API_KEY", "\"$googleBooksApiKey\"")
 
         vectorDrawables {
             useSupportLibrary = true

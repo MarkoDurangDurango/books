@@ -40,7 +40,7 @@ class BookRepository(
             return@withContext existing.toDraft(existingCopies = dao.getCopyCount(existing.id))
         }
 
-        val remote = metadata.lookup(isbn13) ?: BookDraft(isbn13 = isbn13)
+        val remote = metadata.lookup(isbn13) ?: BookDraft(isbn13 = isbn13, metadataSource = "not_found")
         val localCover = remote.coverRemoteUrl?.let { downloadCover(isbn13, it) }
         remote.copy(coverLocalPath = localCover)
     }

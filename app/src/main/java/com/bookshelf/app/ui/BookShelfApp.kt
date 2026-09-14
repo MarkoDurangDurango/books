@@ -586,9 +586,10 @@ private fun EditorScreen(
                     Text(
                         when {
                             draft.metadataSource == "manual" -> "Ручное заполнение"
-                            draft.metadataSource.contains("+") -> "Google Books + Open Library"
+                            draft.metadataSource == "not_found" -> "Метаданные не найдены"
+                            draft.metadataSource.contains("+") -> "Несколько источников"
                             draft.metadataSource == "google_books" -> "Google Books"
-                            draft.metadataSource == "open_library" -> "Open Library"
+                            draft.metadataSource.startsWith("open_library") -> "Open Library"
                             else -> draft.metadataSource
                         },
                         color = MaterialTheme.colorScheme.primary,

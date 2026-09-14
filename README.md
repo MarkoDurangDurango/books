@@ -47,3 +47,11 @@ CI выполняет три отдельные проверки:
 Artifact `BookShelf-build-diagnostics` создаётся всегда и содержит отдельные логи каждого этапа.
 
 Release/minify в этой версии намеренно не участвуют в CI: сначала фиксируем воспроизводимую debug-сборку и проверяем приложение на устройстве, после чего добавим signing и release pipeline отдельно.
+
+## Метаданные по ISBN (v1.0.3)
+
+В версии 1.0.3 исправлен главный сценарий автозаполнения. Теперь BookShelf сначала использует Open Library Books API по точному ISBN, затем Search API как fallback. Эти запросы не требуют ключа.
+
+Google Books оставлен дополнительным источником, потому что официальный Books API требует идентификатор приложения (API key) даже для публичных данных. Чтобы включить его в GitHub Actions, создайте repository secret `GOOGLE_BOOKS_API_KEY`. Если secret отсутствует, сборка всё равно работает через Open Library.
+
+Путь в GitHub: **Settings → Secrets and variables → Actions → New repository secret**.

@@ -47,8 +47,14 @@ class BookShelfViewModel(
         viewModelScope.launch {
             _busy.value = true
             runCatching { repository.lookup(isbn) }
-                .onSuccess {
-                    _draft.value = it
+                .onSuccess { result ->
+                    _draft.value = result
+                    if (result.title.isBlank()) {
+                        _message.value = UiMessage(
+                            "ISBN распознан, но метаданные этого издания не найдены. Можно заполнить вручную или подключить Google Books API key.",
+                            true
+                        )
+                    }
                     onReady()
                 }
                 .onFailure {
