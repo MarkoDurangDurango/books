@@ -27,7 +27,7 @@ globalThis.fetch = async (input, init = {}) => {
   if (url.includes("search.rsl.ru/ru/record/01012345678")) {
     return new Response(`
       <html><head><title>Варфоломеев, Сергей Дмитриевич. - ${SAMPLE_TITLE} - Search RSL</title></head><body>
-      <div>020 | ##</div><div>$a 978-5-91522-502-1</div>
+      <div>020 | ##</div><div>$a 978-5-91522-502-1</div><div>ISBN</div>
       <div>245 | 10</div><div>$a ${SAMPLE_TITLE}</div><div>$c Сергей Варфоломеев</div>
       <div>260 | ##</div><div>$a Москва</div><div>$b Научный мир</div><div>$c 2021</div>
       <div>300 | ##</div><div>$a 281 с.</div>
