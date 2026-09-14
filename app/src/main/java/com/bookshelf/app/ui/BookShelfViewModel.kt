@@ -51,7 +51,7 @@ class BookShelfViewModel(
                     _draft.value = result
                     if (result.title.isBlank()) {
                         _message.value = UiMessage(
-                            "ISBN распознан, но метаданные этого издания не найдены. Можно заполнить вручную или подключить Google Books API key.",
+                            "ISBN распознан, но Google Books, НЭБ и Open Library не нашли это издание. Карточку можно заполнить вручную.",
                             true
                         )
                     }

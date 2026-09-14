@@ -13,8 +13,8 @@ android {
         applicationId = "com.bookshelf.app"
         minSdk = 23
         targetSdk = 36
-        versionCode = 3
-        versionName = "1.0.3"
+        versionCode = 4
+        versionName = "1.0.4"
 
         val googleBooksApiKey = project.providers.gradleProperty("GOOGLE_BOOKS_API_KEY")
             .orElse(System.getenv("GOOGLE_BOOKS_API_KEY") ?: "")
