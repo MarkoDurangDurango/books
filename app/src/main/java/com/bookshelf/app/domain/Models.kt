@@ -42,3 +42,16 @@ data class BookDraft(
     val notes: String = "",
     val existingCopies: Int = 0
 )
+
+data class MetadataDiagnostic(
+    val source: String,
+    val status: String,
+    val detail: String = ""
+)
+
+data class BookLookupResult(
+    val draft: BookDraft,
+    val diagnostics: List<MetadataDiagnostic> = emptyList(),
+    val resolverUsed: Boolean = false,
+    val matchConfidence: Double? = null
+)

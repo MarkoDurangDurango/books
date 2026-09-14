@@ -1,17 +1,20 @@
 package com.bookshelf.app.data
 
 import android.content.Context
+import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.pdf.PdfDocument
 import android.net.Uri
 import com.bookshelf.app.domain.BookCondition
 import com.bookshelf.app.domain.BookDraft
+import com.bookshelf.app.domain.BookLookupResult
 import com.bookshelf.app.domain.PublicationType
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
+import java.io.ByteArrayOutputStream
 import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
@@ -24,7 +27,7 @@ import java.util.zip.ZipOutputStream
 
 class AppContainer(context: Context) {
     private val db = BookShelfDatabase.get(context)
-    val repository = BookRepository(context.applicationContext, db.bookDao(), MetadataService())
+    val repository = BookRepository(context.applicationContext, db.bookDao(), MetadataService(context.applicationContext))
 }
 
 class BookRepository(
@@ -34,16 +37,39 @@ class BookRepository(
 ) {
     val shelf: Flow<List<BookWithEdition>> = dao.observeShelf()
 
-    suspend fun lookup(isbn13: String): BookDraft = withContext(Dispatchers.IO) {
+    suspend fun lookup(isbn13: String): BookLookupResult = withContext(Dispatchers.IO) {
         val existing = dao.getEditionByIsbn(isbn13)
         if (existing != null) {
-            return@withContext existing.toDraft(existingCopies = dao.getCopyCount(existing.id))
+            return@withContext BookLookupResult(
+                existing.toDraft(existingCopies = dao.getCopyCount(existing.id))
+            )
         }
 
-        val remote = metadata.lookup(isbn13) ?: BookDraft(isbn13 = isbn13, metadataSource = "not_found")
+        val result = metadata.lookupDetailed(isbn13)
+        val remote = result.draft
         val localCover = remote.coverRemoteUrl?.let { downloadCover(isbn13, it) }
-        remote.copy(coverLocalPath = localCover)
+        result.copy(draft = remote.copy(coverLocalPath = localCover))
     }
+
+    suspend fun recognizeCover(path: String): BookLookupResult = withContext(Dispatchers.IO) {
+        val sourceFile = File(path)
+        require(sourceFile.exists()) { "Фотография обложки не найдена" }
+        val bytes = prepareCoverForRecognition(sourceFile)
+        val result = metadata.lookupByCover(bytes)
+        val draft = result.draft
+        val localCover = when {
+            !draft.coverRemoteUrl.isNullOrBlank() && draft.isbn13.isNotBlank() ->
+                downloadCover(draft.isbn13, draft.coverRemoteUrl) ?: keepCapturedCover(sourceFile, draft.isbn13)
+            else -> keepCapturedCover(sourceFile, draft.isbn13)
+        }
+        result.copy(draft = draft.copy(coverLocalPath = localCover))
+    }
+
+    fun resolverUrl(): String = metadata.resolverUrl()
+
+    fun setResolverUrl(value: String) = metadata.setResolverUrl(value)
+
+    suspend fun testResolver(): String = withContext(Dispatchers.IO) { metadata.testResolver() }
 
     suspend fun getDraft(copyId: Long): BookDraft? = withContext(Dispatchers.IO) {
         val book = dao.getBook(copyId) ?: return@withContext null
@@ -324,6 +350,29 @@ class BookRepository(
                 )
             }
         }
+
+    private fun prepareCoverForRecognition(file: File): ByteArray {
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        BitmapFactory.decodeFile(file.absolutePath, bounds)
+        var sample = 1
+        while (bounds.outWidth / sample > 1600 || bounds.outHeight / sample > 1600) sample *= 2
+        val options = BitmapFactory.Options().apply { inSampleSize = sample.coerceAtLeast(1) }
+        val bitmap = BitmapFactory.decodeFile(file.absolutePath, options)
+            ?: error("Не удалось прочитать фотографию обложки")
+        return ByteArrayOutputStream().use { out ->
+            bitmap.compress(Bitmap.CompressFormat.JPEG, 82, out)
+            bitmap.recycle()
+            out.toByteArray()
+        }
+    }
+
+    private fun keepCapturedCover(file: File, isbn: String): String? = runCatching {
+        val dir = File(context.filesDir, "covers").apply { mkdirs() }
+        val safeName = isbn.takeIf { it.isNotBlank() } ?: "cover_${System.currentTimeMillis()}"
+        val target = File(dir, "$safeName.jpg")
+        file.copyTo(target, overwrite = true)
+        target.absolutePath
+    }.getOrNull()
 
     private fun downloadCover(isbn: String, remoteUrl: String): String? {
         val dir = File(context.filesDir, "covers").apply { mkdirs() }

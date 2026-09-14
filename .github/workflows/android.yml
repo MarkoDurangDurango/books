@@ -11,6 +11,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       GOOGLE_BOOKS_API_KEY: ${{ secrets.GOOGLE_BOOKS_API_KEY }}
+      BOOKSHELF_RESOLVER_URL: ${{ secrets.BOOKSHELF_RESOLVER_URL }}
     permissions:
       contents: read
 
@@ -34,6 +35,11 @@ jobs:
 
       - name: Install Android 36 SDK
         run: sdkmanager "platform-tools" "platforms;android-36" "build-tools;36.0.0"
+
+      - name: Check resolver JavaScript
+        run: |
+          node --check worker/src/index.js
+          node worker/test/smoke.mjs
 
       - name: Verify dependency compatibility
         shell: bash

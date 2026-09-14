@@ -1,7 +1,10 @@
 package com.bookshelf.app.data
 
+import android.content.Context
 import com.bookshelf.app.BuildConfig
 import com.bookshelf.app.domain.BookDraft
+import com.bookshelf.app.domain.BookLookupResult
+import com.bookshelf.app.domain.MetadataDiagnostic
 import com.bookshelf.app.domain.PublicationType
 import org.json.JSONArray
 import org.json.JSONObject
@@ -11,30 +14,99 @@ import java.net.URLEncoder
 import java.net.URL
 import java.nio.charset.StandardCharsets
 import java.io.StringReader
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import javax.xml.parsers.DocumentBuilderFactory
 import org.w3c.dom.Element
 import org.xml.sax.InputSource
 
-class MetadataService {
-    suspend fun lookup(isbn13: String): BookDraft? {
-        val googleExact = runCatching { googleBooks(isbn13, exactIsbnQuery = true) }.getOrNull()
-        val rusNeb = runCatching { rusNeb(isbn13) }.getOrNull()
-        val openExact = runCatching { openLibraryBooksApi(isbn13) }.getOrNull()
+class MetadataService(private val context: Context) {
+    private val prefs = context.getSharedPreferences("bookshelf_settings", Context.MODE_PRIVATE)
 
-        val needFallback = listOfNotNull(googleExact, rusNeb, openExact).none { !it.isIncomplete() }
+    fun resolverUrl(): String = prefs.getString("resolver_url", null)
+        ?.trim()
+        ?.trimEnd('/')
+        ?.takeIf { it.isNotBlank() }
+        ?: BuildConfig.BOOKSHELF_RESOLVER_URL.trim().trimEnd('/')
 
-        val googleBroad = if (googleExact == null || googleExact.isIncomplete()) {
-            runCatching { googleBooks(isbn13, exactIsbnQuery = false) }.getOrNull()
-        } else {
-            null
+    fun setResolverUrl(value: String) {
+        prefs.edit().putString("resolver_url", value.trim().trimEnd('/')).apply()
+    }
+
+    fun testResolver(): String {
+        val base = resolverUrl()
+        require(base.isNotBlank()) { "Resolver URL не указан" }
+        val root = JSONObject(requestResolver("$base/health", "GET", null))
+        require(root.optBoolean("ok", false)) { "Resolver ответил некорректно" }
+        return root.optString("version", "unknown")
+    }
+
+    suspend fun lookupDetailed(isbn13: String): BookLookupResult {
+        val diagnostics = mutableListOf<MetadataDiagnostic>()
+        val base = resolverUrl()
+        if (base.isNotBlank()) {
+            runCatching { resolverIsbn(base, isbn13) }
+                .onSuccess { result ->
+                    diagnostics += result.diagnostics
+                    if (result.draft.title.isNotBlank()) {
+                        return result.copy(diagnostics = diagnostics, resolverUsed = true)
+                    }
+                }
+                .onFailure { error ->
+                    diagnostics += MetadataDiagnostic("resolver", "ERROR", error.message.orEmpty().take(180))
+                }
         }
-        val openSearch = if (needFallback) {
-            runCatching { openLibrarySearch(isbn13) }.getOrNull()
-        } else {
-            null
-        }
 
-        val candidates = listOfNotNull(googleExact, rusNeb, openExact, googleBroad, openSearch)
+        val local = lookupLocal(isbn13)
+        if (local != null) {
+            diagnostics += MetadataDiagnostic(local.metadataSource, "FOUND", "direct fallback")
+            return BookLookupResult(local, diagnostics, resolverUsed = false)
+        }
+        if (base.isBlank()) diagnostics += MetadataDiagnostic("resolver", "NOT_CONFIGURED", "Укажите URL resolver в настройках")
+        return BookLookupResult(BookDraft(isbn13 = isbn13, metadataSource = "not_found"), diagnostics, resolverUsed = false)
+    }
+
+    suspend fun lookupByCover(jpegBytes: ByteArray): BookLookupResult {
+        val base = resolverUrl()
+        if (base.isBlank()) {
+            return BookLookupResult(
+                BookDraft(metadataSource = "cover_resolver_not_configured"),
+                listOf(MetadataDiagnostic("resolver", "NOT_CONFIGURED", "Укажите URL resolver в настройках"))
+            )
+        }
+        return resolverCover(base, jpegBytes).copy(resolverUsed = true)
+    }
+
+    private suspend fun lookupLocal(isbn13: String): BookDraft? {
+        val initial = coroutineScope {
+            val nlr = async { runCatching { nationalLibraryRussia(isbn13) }.getOrNull() }
+            val google = async { runCatching { googleBooks(isbn13, exactIsbnQuery = true) }.getOrNull() }
+            val neb = async { runCatching { rusNeb(isbn13) }.getOrNull() }
+            val open = async { runCatching { openLibraryBooksApi(isbn13) }.getOrNull() }
+            listOf(nlr.await(), google.await(), neb.await(), open.await())
+        }
+        val nlr = initial[0]
+        val googleExact = initial[1]
+        val rusNeb = initial[2]
+        val openExact = initial[3]
+
+        val needFallback = listOfNotNull(nlr, googleExact, rusNeb, openExact).none { !it.isIncomplete() }
+
+        val fallback = coroutineScope {
+            val google = async {
+                if (googleExact == null || googleExact.isIncomplete()) {
+                    runCatching { googleBooks(isbn13, exactIsbnQuery = false) }.getOrNull()
+                } else null
+            }
+            val open = async {
+                if (needFallback) runCatching { openLibrarySearch(isbn13) }.getOrNull() else null
+            }
+            google.await() to open.await()
+        }
+        val googleBroad = fallback.first
+        val openSearch = fallback.second
+
+        val candidates = listOfNotNull(nlr, googleExact, rusNeb, openExact, googleBroad, openSearch)
         if (candidates.isEmpty()) return null
 
         fun pick(selector: (RemoteBook) -> String?): String? =
@@ -63,6 +135,223 @@ class MetadataService {
             metadataSource = sources.ifBlank { "not_found" }
         )
     }
+
+    private fun resolverIsbn(base: String, isbn: String): BookLookupResult {
+        val url = "$base/v1/books/isbn/${normalizeIsbn(isbn)}"
+        return parseResolverResponse(requestResolver(url, "GET", null))
+    }
+
+    private fun resolverCover(base: String, jpegBytes: ByteArray): BookLookupResult {
+        val url = "$base/v1/books/cover"
+        return parseResolverResponse(requestResolver(url, "POST", jpegBytes))
+    }
+
+    private fun requestResolver(url: String, method: String, body: ByteArray?): String {
+        val connection = URL(url).openConnection() as HttpURLConnection
+        connection.connectTimeout = 12_000
+        connection.readTimeout = 30_000
+        connection.requestMethod = method
+        connection.instanceFollowRedirects = true
+        connection.setRequestProperty("Accept", "application/json")
+        connection.setRequestProperty("User-Agent", "BookShelf-Android/1.1.0")
+        if (body != null) {
+            connection.doOutput = true
+            connection.setRequestProperty("Content-Type", "image/jpeg")
+            connection.setFixedLengthStreamingMode(body.size)
+            connection.outputStream.use { it.write(body) }
+        }
+        return try {
+            val code = connection.responseCode
+            val stream = if (code in 200..299) connection.inputStream else connection.errorStream
+            val text = stream?.bufferedReader()?.use { it.readText() }.orEmpty()
+            if (code !in 200..299) error("Resolver HTTP $code: ${text.take(180)}")
+            text
+        } finally {
+            connection.disconnect()
+        }
+    }
+
+    private fun parseResolverResponse(text: String): BookLookupResult {
+        val root = JSONObject(text)
+        val diagnostics = buildList {
+            val items = root.optJSONArray("diagnostics")
+            if (items != null) {
+                for (i in 0 until items.length()) {
+                    val d = items.optJSONObject(i) ?: continue
+                    add(
+                        MetadataDiagnostic(
+                            source = d.optString("source", "unknown"),
+                            status = d.optString("status", "UNKNOWN"),
+                            detail = d.optString("detail", "")
+                        )
+                    )
+                }
+            }
+        }
+        val book = root.optJSONObject("book")
+        if (book == null || !root.optBoolean("found", false)) {
+            return BookLookupResult(
+                draft = BookDraft(
+                    isbn13 = root.optString("isbn13"),
+                    metadataSource = "not_found"
+                ),
+                diagnostics = diagnostics,
+                resolverUsed = true,
+                matchConfidence = root.optDouble("matchConfidence").takeIf { !it.isNaN() }
+            )
+        }
+        val publicationType = PublicationType.entries.firstOrNull {
+            it.name == book.optString("publicationType")
+        } ?: PublicationType.BOOK
+        return BookLookupResult(
+            draft = BookDraft(
+                isbn13 = book.optString("isbn13"),
+                isbn10 = book.optString("isbn10").takeIf { it.isNotBlank() },
+                title = book.optString("title"),
+                subtitle = book.optString("subtitle"),
+                authors = book.optString("authors"),
+                publisher = book.optString("publisher"),
+                publishedYear = book.optString("publishedYear"),
+                pages = book.optString("pages"),
+                publicationType = publicationType,
+                categories = book.optString("categories"),
+                description = book.optString("description"),
+                coverRemoteUrl = book.optString("coverUrl").takeIf { it.isNotBlank() },
+                metadataSource = book.optString("metadataSource", "resolver")
+            ),
+            diagnostics = diagnostics,
+            resolverUsed = true,
+            matchConfidence = root.optDouble("matchConfidence").takeIf { !it.isNaN() }
+        )
+    }
+
+    private fun nationalLibraryRussia(isbn: String): RemoteBook? {
+        val wanted = normalizeIsbn(isbn)
+        val query = URLEncoder.encode(wanted, StandardCharsets.UTF_8.toString())
+        val searchHtml = getText(
+            "https://nb.nlr.ru/opac-search.pl?q=$query",
+            accept = "text/html,application/xhtml+xml"
+        )
+        val ids = Regex(
+            """(?:opac-detail|opac-MARCdetail)\.pl\?(?:[^\"'<>]*?(?:&|&amp;))*biblionumber=(\d+)""",
+            RegexOption.IGNORE_CASE
+        ).findAll(searchHtml)
+            .map { it.groupValues[1] }
+            .distinct()
+            .take(6)
+            .toList()
+
+        for (id in ids) {
+            val marc = runCatching {
+                getText("https://nb.nlr.ru/opac-MARCdetail.pl?biblionumber=$id", "text/html,application/xhtml+xml")
+            }.getOrNull() ?: continue
+            val detail = runCatching {
+                getText("https://nb.nlr.ru/opac-detail.pl?biblionumber=$id", "text/html,application/xhtml+xml")
+            }.getOrNull().orEmpty()
+            parseNlrPages(marc, detail, wanted)?.let { return it }
+        }
+        return null
+    }
+
+    private fun parseNlrPages(marcHtml: String, detailHtml: String, expectedIsbn: String): RemoteBook? {
+        val marcText = htmlToText(marcHtml)
+        val detailText = htmlToText(detailHtml)
+        val combined = "$detailText\n$marcText"
+        val isbns = extractIsbns(combined)
+        if (expectedIsbn !in isbns) return null
+
+        var title = Regex("""<title[^>]*>([\s\S]*?)</title>""", RegexOption.IGNORE_CASE)
+            .find(detailHtml)?.groupValues?.getOrNull(1)
+            ?.let(::htmlToText)
+            .orEmpty()
+            .replace(Regex("""^Подробности\s*:\s*""", RegexOption.IGNORE_CASE), "")
+            .replace(Regex("""\s*[›|-]\s*Национальная библиография каталог.*$""", RegexOption.IGNORE_CASE), "")
+            .trim()
+        if (title.isBlank()) title = fieldAfter(marcText, listOf("Основное заглавие", "Заглавие", "Собственно заглавие")).orEmpty()
+
+        val authors = listOfNotNull(
+            fieldAfter(marcText, listOf("Первые сведения об ответственности", "Сведения об ответственности")),
+            fieldAfter(marcText, listOf("Фамилия"))
+        ).distinct().joinToString(", ")
+        val publisher = fieldAfter(
+            marcText,
+            listOf("Имя издателя, распространителя", "Издательство, распространитель", "Издательство")
+        )
+        val year = extractYear(
+            fieldAfter(marcText, listOf("Дата издания, распространения и т.д.", "Дата публикации", "Год издания"))
+                ?: combined
+        )
+        val pages = fieldAfter(
+            marcText,
+            listOf("Специфическое обозначение материала и объем", "Физическое описание", "Объем")
+        )?.let { Regex("""\b(\d{1,5})\b""").find(it)?.groupValues?.get(1) }
+        val categories = listOfNotNull(
+            fieldAfter(marcText, listOf("Тематический термин")),
+            fieldAfter(marcText, listOf("Предметная рубрика"))
+        ).distinct().joinToString(", ")
+        val cover = Regex("""https://vivaldi\.nlr\.ru/[^\s<>\"']+/cover""", RegexOption.IGNORE_CASE)
+            .find(combined)?.value
+
+        if (title.isBlank()) return null
+        return RemoteBook(
+            source = "nlr_national_bibliography",
+            isbn10 = isbns.firstOrNull { it.length == 10 },
+            title = title,
+            authors = authors.takeIf { it.isNotBlank() },
+            publisher = publisher,
+            publishedYear = year,
+            pages = pages,
+            categories = categories.takeIf { it.isNotBlank() },
+            coverUrl = cover
+        )
+    }
+
+    private fun htmlToText(html: String): String = html
+        .replace(Regex("""<script\b[^>]*>[\s\S]*?</script>""", RegexOption.IGNORE_CASE), " ")
+        .replace(Regex("""<style\b[^>]*>[\s\S]*?</style>""", RegexOption.IGNORE_CASE), " ")
+        .replace(Regex("""</(?:tr|td|th|div|p|li|h\d|section|article)>""", RegexOption.IGNORE_CASE), "\n")
+        .replace(Regex("""<br\s*/?>""", RegexOption.IGNORE_CASE), "\n")
+        .replace(Regex("""<[^>]+>"""), " ")
+        .replace("&nbsp;", " ", ignoreCase = true)
+        .replace("&amp;", "&", ignoreCase = true)
+        .replace("&quot;", "\"", ignoreCase = true)
+        .replace("&#39;", "'", ignoreCase = true)
+        .replace("&lt;", "<", ignoreCase = true)
+        .replace("&gt;", ">", ignoreCase = true)
+        .replace(Regex("""[ \t]+"""), " ")
+        .replace(Regex("""\n[ \t]+"""), "\n")
+        .replace(Regex("""\n{3,}"""), "\n\n")
+        .trim()
+
+    private fun fieldAfter(text: String, labels: List<String>): String? {
+        val lines = text.lines().map { it.trim() }.filter { it.isNotBlank() }
+        for ((index, line) in lines.withIndex()) {
+            for (label in labels) {
+                val pos = line.indexOf(label, ignoreCase = true)
+                if (pos < 0) continue
+                val inline = line.substring(pos + label.length)
+                    .replace(Regex("""^[\s|:\-–—]+"""), "")
+                    .trim()
+                if (inline.isNotBlank() && !looksLikeFieldHeader(inline)) return inline
+                for (j in index + 1..minOf(index + 3, lines.lastIndex)) {
+                    val value = lines[j].replace(Regex("""^[\s|:\-–—]+"""), "").trim()
+                    if (value.isNotBlank() && !looksLikeFieldHeader(value)) return value
+                }
+            }
+        }
+        return null
+    }
+
+    private fun looksLikeFieldHeader(value: String): Boolean =
+        Regex("""^(\d{3}\s*[#0-9A-Za-z]{0,2}\s*[-–—]|[-–—]+$|[A-ZА-ЯЁ0-9 ()/.-]{18,}$)""").containsMatchIn(value)
+
+    private fun extractIsbns(text: String): List<String> =
+        Regex("""(?:97[89][\s-]*)?[0-9Xx][0-9Xx\s-]{8,20}[0-9Xx]""")
+            .findAll(text)
+            .map { normalizeIsbn(it.value) }
+            .filter { it.length == 10 || it.length == 13 }
+            .distinct()
+            .toList()
 
     private fun googleBooks(isbn: String, exactIsbnQuery: Boolean): RemoteBook? {
         val rawQuery = if (exactIsbnQuery) "isbn:$isbn" else isbn
@@ -383,14 +672,17 @@ class MetadataService {
         connection.setRequestProperty("Accept-Language", "ru,en;q=0.8")
         connection.setRequestProperty(
             "User-Agent",
-            if (url.contains("rusneb.ru")) {
+            if (url.contains("rusneb.ru") || url.contains("nb.nlr.ru")) {
                 "Mozilla/5.0 (Linux; Android 16) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0 Mobile Safari/537.36"
             } else {
-                "BookShelf/1.0.4 (Android; personal library app)"
+                "BookShelf/1.1.0 (Android; personal library app)"
             }
         )
         if (url.contains("rusneb.ru")) {
             connection.setRequestProperty("Referer", "https://rusneb.ru/")
+        }
+        if (url.contains("nb.nlr.ru")) {
+            connection.setRequestProperty("Referer", "https://nb.nlr.ru/")
         }
 
         return try {

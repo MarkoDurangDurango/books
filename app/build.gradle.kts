@@ -13,8 +13,8 @@ android {
         applicationId = "com.bookshelf.app"
         minSdk = 23
         targetSdk = 36
-        versionCode = 4
-        versionName = "1.0.4"
+        versionCode = 5
+        versionName = "1.1.0"
 
         val googleBooksApiKey = project.providers.gradleProperty("GOOGLE_BOOKS_API_KEY")
             .orElse(System.getenv("GOOGLE_BOOKS_API_KEY") ?: "")
@@ -22,6 +22,14 @@ android {
             .replace("\\", "\\\\")
             .replace("\"", "\\\"")
         buildConfigField("String", "GOOGLE_BOOKS_API_KEY", "\"$googleBooksApiKey\"")
+
+        val resolverUrl = project.providers.gradleProperty("BOOKSHELF_RESOLVER_URL")
+            .orElse(System.getenv("BOOKSHELF_RESOLVER_URL") ?: "")
+            .get()
+            .trimEnd('/')
+            .replace("\\", "\\\\")
+            .replace("\"", "\\\"")
+        buildConfigField("String", "BOOKSHELF_RESOLVER_URL", "\"$resolverUrl\"")
 
         vectorDrawables {
             useSupportLibrary = true

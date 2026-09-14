@@ -30,6 +30,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.outlined.Add
+import androidx.compose.material.icons.outlined.CameraAlt
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.FileDownload
@@ -52,6 +53,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SmallFloatingActionButton
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
@@ -81,7 +83,7 @@ import com.bookshelf.app.domain.BookCondition
 import com.bookshelf.app.domain.BookDraft
 import com.bookshelf.app.domain.PublicationType
 
-private enum class Screen { SHELF, SCANNER, EDITOR, DETAIL, SETTINGS }
+private enum class Screen { SHELF, SCANNER, COVER_SCANNER, EDITOR, DETAIL, SETTINGS }
 
 @Composable
 fun BookShelfApp(vm: BookShelfViewModel) {
@@ -101,7 +103,7 @@ fun BookShelfApp(vm: BookShelfViewModel) {
 
     BackHandler(screen != Screen.SHELF) {
         when (screen) {
-            Screen.EDITOR, Screen.SCANNER, Screen.SETTINGS, Screen.DETAIL -> goShelf()
+            Screen.EDITOR, Screen.SCANNER, Screen.COVER_SCANNER, Screen.SETTINGS, Screen.DETAIL -> goShelf()
             else -> Unit
         }
     }
@@ -118,6 +120,7 @@ fun BookShelfApp(vm: BookShelfViewModel) {
             Screen.SHELF -> ShelfScreen(
                 books = shelf,
                 onScan = { screen = Screen.SCANNER },
+                onCover = { screen = Screen.COVER_SCANNER },
                 onManual = {
                     vm.newManual()
                     screen = Screen.EDITOR
@@ -133,6 +136,13 @@ fun BookShelfApp(vm: BookShelfViewModel) {
                 onBack = goShelf,
                 onIsbn = { isbn ->
                     vm.lookup(isbn) { screen = Screen.EDITOR }
+                }
+            )
+
+            Screen.COVER_SCANNER -> CoverScannerScreen(
+                onBack = goShelf,
+                onCaptured = { path ->
+                    vm.recognizeCover(path) { screen = Screen.EDITOR }
                 }
             )
 
@@ -211,6 +221,7 @@ fun BookShelfApp(vm: BookShelfViewModel) {
 private fun ShelfScreen(
     books: List<BookWithEdition>,
     onScan: () -> Unit,
+    onCover: () -> Unit,
     onManual: () -> Unit,
     onSettings: () -> Unit,
     onBook: (Long) -> Unit
@@ -253,6 +264,14 @@ private fun ShelfScreen(
                     }
                     DropdownMenu(expanded = moreOpen, onDismissRequest = { moreOpen = false }) {
                         DropdownMenuItem(
+                            text = { Text("Распознать по обложке") },
+                            leadingIcon = { Icon(Icons.Outlined.CameraAlt, null) },
+                            onClick = {
+                                moreOpen = false
+                                onCover()
+                            }
+                        )
+                        DropdownMenuItem(
                             text = { Text("Добавить вручную") },
                             leadingIcon = { Icon(Icons.Outlined.Add, null) },
                             onClick = {
@@ -273,11 +292,17 @@ private fun ShelfScreen(
             )
         },
         floatingActionButton = {
-            ExtendedFloatingActionButton(
-                onClick = onScan,
-                icon = { Icon(Icons.Outlined.QrCodeScanner, null) },
-                text = { Text("Сканировать") }
-            )
+            Column(horizontalAlignment = Alignment.End) {
+                SmallFloatingActionButton(onClick = onCover) {
+                    Icon(Icons.Outlined.CameraAlt, contentDescription = "Распознать обложку")
+                }
+                Spacer(Modifier.height(10.dp))
+                ExtendedFloatingActionButton(
+                    onClick = onScan,
+                    icon = { Icon(Icons.Outlined.QrCodeScanner, null) },
+                    text = { Text("Сканировать ISBN") }
+                )
+            }
         },
         containerColor = MaterialTheme.colorScheme.background
     ) { padding ->
@@ -590,6 +615,10 @@ private fun EditorScreen(
                             draft.metadataSource.contains("+") -> "Несколько источников"
                             draft.metadataSource == "google_books" -> "Google Books"
                             draft.metadataSource.startsWith("open_library") -> "Open Library"
+                            draft.metadataSource.contains("nlr_national_bibliography") -> "Российская национальная библиотека"
+                            draft.metadataSource.contains("rsl") -> "Российская государственная библиотека"
+                            draft.metadataSource == "workers_ai_cover" -> "Распознано по обложке"
+                            draft.metadataSource == "cover_resolver_not_configured" -> "Resolver не настроен"
                             else -> draft.metadataSource
                         },
                         color = MaterialTheme.colorScheme.primary,
@@ -710,6 +739,7 @@ private fun SettingsScreen(
     onBack: () -> Unit
 ) {
     var confirmRestore by remember { mutableStateOf<android.net.Uri?>(null) }
+    var resolverUrl by remember { mutableStateOf(vm.resolverUrl()) }
 
     val json = rememberLauncherForActivityResult(
         ActivityResultContracts.CreateDocument("application/json")
@@ -734,7 +764,7 @@ private fun SettingsScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Экспорт и резервные копии") },
+                title = { Text("Настройки") },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(Icons.AutoMirrored.Outlined.ArrowBack, "Назад")
@@ -754,6 +784,35 @@ private fun SettingsScreen(
                 "На полке $bookCount ${copyWord(bookCount)}",
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
+
+            SectionTitle("Расширенный поиск")
+            Text(
+                "Resolver повышает покрытие российских ISBN через каталоги РНБ/РГБ и включает распознавание книги по фотографии обложки.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(top = 8.dp)
+            )
+            OutlinedTextField(
+                value = resolverUrl,
+                onValueChange = { resolverUrl = it },
+                label = { Text("URL BookShelf Resolver") },
+                placeholder = { Text("https://bookshelf-resolver....workers.dev") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth().padding(top = 12.dp),
+                shape = RoundedCornerShape(16.dp)
+            )
+            Button(
+                onClick = { vm.saveResolverUrl(resolverUrl) },
+                modifier = Modifier.fillMaxWidth().padding(top = 10.dp)
+            ) {
+                Text("Сохранить resolver")
+            }
+            OutlinedButton(
+                onClick = vm::testResolver,
+                modifier = Modifier.fillMaxWidth().padding(top = 8.dp)
+            ) {
+                Text("Проверить соединение")
+            }
 
             SectionTitle("Экспорт")
             ActionCard(
@@ -785,7 +844,7 @@ private fun SettingsScreen(
             )
 
             Text(
-                "Данные хранятся только на устройстве. Для первой версии BookShelf не требует аккаунта и не отправляет вашу библиотеку на собственный сервер.",
+                "Полка и резервные копии хранятся локально. При поиске в сеть передаётся только ISBN; при распознавании по обложке — выбранная фотография обложки в настроенный вами BookShelf Resolver. Полный каталог пользователя на сервер не отправляется.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(top = 24.dp)
